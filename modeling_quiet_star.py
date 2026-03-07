@@ -439,6 +439,9 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                             detach=self.optimize_lm_head_only_at_start
                         )
 
+                # Clamp residual logits strictly to prevent NaN propagation
+                residual_logits = torch.clamp(residual_logits, min=-1e4, max=1e4)
+
                 # Apply residual connection
                 if self.no_residual:
                     logits = residual_logits
@@ -455,6 +458,9 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                         logits = residual_logits
                 elif self.skip_residual:
                     logits = base_logits + residual_logits
+
+            # Safety clamp for logits before loss functions
+            logits = torch.clamp(logits, min=-1e4, max=1e4)
 
             # ============ Compute Loss ============
             if labels is not None and ahead_idx >= self.n_ahead - 1:
@@ -476,9 +482,12 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                 if ahead_idx == self.n_ahead - 1:
                     previous_loss = unreduced_loss.clone().detach()
 
+                # Guard unreduced_loss against NaNs explicitly before taking mean
+                unreduced_loss = torch.nan_to_num(unreduced_loss, nan=0.0)
                 cur_loss = loss_mean(unreduced_loss)
+                
                 if torch.isnan(cur_loss) or cur_loss.item() == 0.0:
-                    print(f"[DEBUG STEP {self.training_steps}] cur_loss for thought-augmented pred is {cur_loss.item()}")
+                    print(f"[DEBUG STEP {self.training_steps}] cur_loss for thought-augmented pred is {cur_loss.item()} | Unreduced max: {unreduced_loss.max().item()}")
                     
                 loss = loss + cur_loss
 
@@ -533,6 +542,10 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
 
             # ============ Sample Next Token for Thought ============
             rm_logits = self.lm_head(hidden_states)
+            
+            if torch.isnan(rm_logits).any():
+                print(f"[DEBUG STEP {self.training_steps}] rm_logits at ahead_idx {ahead_idx} is NaN!")
+                rm_logits = torch.nan_to_num(rm_logits, nan=0.0)
 
             if self.tokenizer_has_start_thought_token:
                 rm_logits[..., self.start_token_id] = -1e10
@@ -588,7 +601,8 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                 
                 # Safety check: if Gumbel-Softmax produces NaNs, fallback to standard argmax
                 if torch.isnan(probabilities_2d).any():
-                    fallback_idx = sample_probs.argmax(dim=-1)
+                    print(f"[DEBUG STEP {self.training_steps}] Gumbel softmax output NaN! Falling back to argmax.")
+                    fallback_idx = torch.nan_to_num(sample_probs, nan=0.0).argmax(dim=-1)
                     probabilities_2d = F.one_hot(fallback_idx, num_classes=self.vocab_size).to(sample_probs.dtype)
                     
                 if self.gumbel_detach:
@@ -608,6 +622,10 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
 
             if not contains_thought:
                 with torch.set_grad_enabled(not self.train_only_thinking_embedding):
+                    if torch.isnan(probabilities_2d).any():
+                        print(f"[DEBUG STEP {self.training_steps}] probabilities_2d became NaN before matmul. Replacing with uniform prob.")
+                        probabilities_2d = torch.nan_to_num(probabilities_2d, nan=0.0)
+                        
                     inputs_embeds = probabilities_2d @ (
                         self.model.embed_tokens.weight.to(probabilities.device).to(probabilities.dtype)
                     )
