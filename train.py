@@ -416,7 +416,7 @@ def main():
             "gsm8k", "main",
             split="test",
             cache_dir=os.path.join(args.cache_dir, "datasets"),
-        ).map(
+        ).shuffle(seed=args.seed).select(range(100)).map(
             preprocess_eval_function_gsm,
             batched=True,
             writer_batch_size=200,
@@ -432,7 +432,7 @@ def main():
             "tau/commonsense_qa", "default",
             split="validation",
             cache_dir=os.path.join(args.cache_dir, "datasets"),
-        ).map(
+        ).shuffle(seed=args.seed).select(range(100)).map(
             preprocess_eval_function_csqa,
             batched=True,
             writer_batch_size=200,
