@@ -57,7 +57,7 @@ DEFAULT_CONFIG = {
     # Thought parameters
     "n_ahead": 8,           # Number of thought tokens (including start/end)
     "n_ahead_talk": 4,      # Tokens ahead to predict after thought
-    "n_passes": 2,          # Number of forward passes
+    "n_passes": 1,          # Reduced from 2 to 1 to double the training speed
 
     # Training — optimize memory for H200
     "batch_size": 1,        # Per-device batch size (reduced from 8 to prevent OOM)
@@ -80,7 +80,8 @@ DEFAULT_CONFIG = {
     "n_examples": 10000,    # Number of training examples
 
     # Evaluation & checkpointing
-    "eval_and_logging_steps": 1,    # Log every step
+    "logging_steps": 1,             # Log training metrics every step
+    "eval_steps": 50,               # Evaluate on GSM8K/CSQA every 50 steps (prevents slowing down)
     "save_steps": 20,               # Save checkpoint every 20 steps
 
     # Quiet-STAR specific
@@ -132,7 +133,8 @@ def parse_args():
     parser.add_argument("--dataset_name", type=str, default=DEFAULT_CONFIG["dataset_name"])
     parser.add_argument("--dataset_subset", type=str, default=DEFAULT_CONFIG["dataset_subset"])
     parser.add_argument("--n_examples", type=int, default=DEFAULT_CONFIG["n_examples"])
-    parser.add_argument("--eval_and_logging_steps", type=int, default=DEFAULT_CONFIG["eval_and_logging_steps"])
+    parser.add_argument("--logging_steps", type=int, default=DEFAULT_CONFIG["logging_steps"])
+    parser.add_argument("--eval_steps", type=int, default=DEFAULT_CONFIG["eval_steps"])
     parser.add_argument("--save_steps", type=int, default=DEFAULT_CONFIG["save_steps"])
     parser.add_argument("--gumbel_temperature", type=float, default=DEFAULT_CONFIG["gumbel_temperature"])
     parser.add_argument("--output_dir", type=str, default=DEFAULT_CONFIG["output_dir"])
@@ -468,8 +470,8 @@ def main():
         warmup_steps=args.warmup_steps,
         weight_decay=args.weight_decay,
         label_names=["labels"],
-        logging_steps=args.eval_and_logging_steps,
-        eval_steps=args.eval_and_logging_steps,
+        logging_steps=args.logging_steps,
+        eval_steps=args.eval_steps,
         eval_strategy="steps" if eval_datasets else "no",
         save_steps=args.save_steps,
         save_total_limit=5,         # Keep last 5 checkpoints
