@@ -82,7 +82,7 @@ DEFAULT_CONFIG = {
     # Evaluation & checkpointing
     "logging_steps": 1,             # Log training metrics every step
     "eval_steps": 50,               # Evaluate on GSM8K/CSQA every 50 steps (prevents slowing down)
-    "save_steps": 20,               # Save checkpoint every 20 steps
+    "save_steps": 10,               # Save checkpoint every 20 steps
 
     # Quiet-STAR specific
     "gumbel_temperature": 1.0,
@@ -485,13 +485,14 @@ def main():
     # Initialize Trainer
     # ================================================================
     init_fn = model_init(args, tokenizer)
+    model = init_fn()
 
     trainer = Trainer(
+        model=model,
         args=training_args,
         train_dataset=train_dataset,
         eval_dataset=eval_datasets if eval_datasets else None,
         compute_metrics=compute_metrics if eval_datasets else None,
-        model_init=init_fn,
     )
 
     # ================================================================

@@ -211,6 +211,17 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
         # Post init
         self.post_init()
 
+    def resize_token_embeddings(self, new_num_tokens: Optional[int] = None, pad_to_multiple_of=None) -> nn.Embedding:
+        """
+        Resize token embeddings and synchronize self.vocab_size to prevent index out of bounds
+        during token masking and one_hot generation.
+        """
+        result = super().resize_token_embeddings(new_num_tokens, pad_to_multiple_of=pad_to_multiple_of)
+        
+        # Sync vocab sizes directly from model properties now that it's updated
+        self.vocab_size = self.config.vocab_size
+        return result
+
     def get_input_embeddings(self):
         return self.model.embed_tokens
 
@@ -314,7 +325,9 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
         # Total number of ahead steps: think steps + talk steps
         n_ahead_total = self.n_ahead + self.n_ahead_talk
 
-        loss = torch.tensor(0.0, device=input_ids.device if input_ids is not None else "cuda")
+        # CRITICAL BUG FIX 3: Loss initialized directly with gradients on correct dtype
+        loss = torch.zeros(1, device=input_ids.device if input_ids is not None else "cuda", dtype=self.lm_head.weight.dtype).squeeze()
+        
         policy_reward = None
         action_loglikelihoods_list = []
         sampled_token_history = []
@@ -540,9 +553,11 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                             # Sanitize NaNs before clamping because clamp(nan) == nan
                             safe_prev_sample = torch.nan_to_num(prev_sample_probs, nan=0.0)
                             clamped_sample_probs = torch.clamp(safe_prev_sample, min=-1e4, max=1e4)
+                            # CRITICAL BUG FIX 2: Float32 casting for numerical stability during REINFORCE log_softmax
                             action_loglikelihoods = F.log_softmax(
-                                clamped_sample_probs / self.reinforce_temperature, dim=-1
-                            )[nonzero_indices[:, 0], nonzero_indices[:, 1]]
+                                clamped_sample_probs.float() / self.reinforce_temperature, dim=-1
+                            )[nonzero_indices[:, 0], nonzero_indices[:, 1]].to(clamped_sample_probs.dtype)
+                            
                             action_loglikelihoods_2d = action_loglikelihoods.reshape(
                                 batch_size, -1
                             )[:, :-1 - shift_amount] if shift_amount > 0 else action_loglikelihoods.reshape(batch_size, -1)[:, :-1]
