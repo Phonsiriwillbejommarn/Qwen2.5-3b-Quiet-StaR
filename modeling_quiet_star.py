@@ -495,14 +495,14 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                     shift_logits_flat, shift_labels_flat
                 ).reshape(logits.shape[0], -1)
 
-                if ahead_idx == self.n_ahead - 1:
-                    previous_loss = unreduced_loss.clone().detach()
-
                 # Guard unreduced_loss against NaNs explicitly before taking mean
                 if torch.isnan(unreduced_loss).any():
                     print(f"[{ahead_idx}] unreduced_loss generated NaNs! Replacing with 0.0...")
                     unreduced_loss = torch.nan_to_num(unreduced_loss, nan=0.0)
                 
+                if ahead_idx == self.n_ahead - 1:
+                    previous_loss = unreduced_loss.clone().detach()
+
                 cur_loss = loss_mean(unreduced_loss)
                 
                 if torch.isnan(cur_loss) or cur_loss.item() == 0.0:
@@ -537,8 +537,9 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                         # Find indices of non-zero elements
                         nonzero_indices = prev_probabilities_2d.nonzero()
                         if nonzero_indices.shape[0] > 0:
-                            # Clamp logits to prevent extremely large negative values
-                            clamped_sample_probs = torch.clamp(prev_sample_probs, min=-1e4, max=1e4)
+                            # Sanitize NaNs before clamping because clamp(nan) == nan
+                            safe_prev_sample = torch.nan_to_num(prev_sample_probs, nan=0.0)
+                            clamped_sample_probs = torch.clamp(safe_prev_sample, min=-1e4, max=1e4)
                             action_loglikelihoods = F.log_softmax(
                                 clamped_sample_probs / self.reinforce_temperature, dim=-1
                             )[nonzero_indices[:, 0], nonzero_indices[:, 1]]
