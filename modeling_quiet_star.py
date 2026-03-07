@@ -493,10 +493,13 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                         original_dqn_reward = cur_policy_reward_base_loss.detach() - unreduced_loss
 
                     if prev_probabilities_2d is not None and prev_sample_probs is not None:
+                        # Find indices of non-zero elements
                         nonzero_indices = prev_probabilities_2d.nonzero()
                         if nonzero_indices.shape[0] > 0:
+                            # Clamp logits to prevent extremely large negative values
+                            clamped_sample_probs = torch.clamp(prev_sample_probs, min=-1e4, max=1e4)
                             action_loglikelihoods = F.log_softmax(
-                                prev_sample_probs / self.reinforce_temperature, dim=-1
+                                clamped_sample_probs / self.reinforce_temperature, dim=-1
                             )[nonzero_indices[:, 0], nonzero_indices[:, 1]]
                             action_loglikelihoods_2d = action_loglikelihoods.reshape(
                                 batch_size, -1
@@ -569,6 +572,12 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                 probabilities_2d = F.gumbel_softmax(
                     sample_probs, tau=temperature, hard=True, dim=-1
                 )
+                
+                # Safety check: if Gumbel-Softmax produces NaNs, fallback to standard argmax
+                if torch.isnan(probabilities_2d).any():
+                    fallback_idx = sample_probs.argmax(dim=-1)
+                    probabilities_2d = F.one_hot(fallback_idx, num_classes=self.vocab_size).to(sample_probs.dtype)
+                    
                 if self.gumbel_detach:
                     probabilities_2d = probabilities_2d.detach()
 
@@ -617,6 +626,8 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
             policy_reward = policy_reward.detach()
             reward_mean = policy_reward.mean()
             reward_std = policy_reward.std().clamp(min=1e-6)
+            if torch.isnan(reward_std) or reward_std == 0:
+                reward_std = torch.tensor(1e-6, device=policy_reward.device)
             policy_reward = (policy_reward - reward_mean) / reward_std
 
             for action_loglik in action_loglikelihoods_list:
@@ -633,9 +644,17 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
             shift_logits_base = initial_loss_logits[..., :-1, :].contiguous()
             shift_labels_base = labels[..., 1:].contiguous()
 
-            loss_fct_base = CrossEntropyLoss()
+            # Ignore pad_token_id for base loss calculation
+            loss_fct_base = CrossEntropyLoss(ignore_index=-100 if self.tokenizer is None or not hasattr(self.tokenizer, 'pad_token_id') else self.tokenizer.pad_token_id)
+            
             shift_logits_base = shift_logits_base.view(-1, self.config.vocab_size)
             shift_labels_base = shift_labels_base.view(-1).to(shift_logits_base.device)
+            
+            # Additional safety: explicitly mask pad_token_id to -100
+            if self.tokenizer is not None and hasattr(self.tokenizer, 'pad_token_id'):
+                shift_labels_base[shift_labels_base == self.tokenizer.pad_token_id] = -100
+                loss_fct_base = CrossEntropyLoss(ignore_index=-100)
+                
             base_loss = loss_fct_base(shift_logits_base, shift_labels_base)
             loss = loss + self.base_loss_beta * base_loss
 
