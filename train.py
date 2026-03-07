@@ -80,8 +80,8 @@ DEFAULT_CONFIG = {
     "n_examples": 10000,    # Number of training examples
 
     # Evaluation & checkpointing
-    "eval_and_logging_steps": 50,
-    "save_steps": 100,      # Save every 100 steps (safety net for GPU crashes)
+    "eval_and_logging_steps": 1,    # Log every step
+    "save_steps": 20,               # Save checkpoint every 20 steps
 
     # Quiet-STAR specific
     "gumbel_temperature": 1.0,
@@ -368,18 +368,23 @@ def main():
     # Load datasets
     # ================================================================
     logger.info(f"Loading training dataset: {args.dataset_name}")
-    logger.info("  ➤ FineWeb-Edu: educational web text filtered for quality")
-    logger.info("  ➤ Chosen because educational text contains implicit reasoning steps")
-    logger.info("  ➤ This is what Quiet-STAR benefits from the most")
+    logger.info("  ➤ Using STREAMING mode (no need to download entire dataset)")
+    logger.info(f"  ➤ Only fetching {args.n_examples} examples")
 
-    dataset = load_dataset(
+    # Use streaming to avoid downloading the entire dataset (FineWeb-Edu is ~1.5TB!)
+    streamed_dataset = load_dataset(
         args.dataset_name,
         args.dataset_subset,
-        split=f"train[:{args.n_examples}]",
-        num_proc=4,
-        cache_dir=os.path.join(args.cache_dir, "datasets"),
+        split="train",
+        streaming=True,
         trust_remote_code=True,
     )
+
+    # Take only n_examples and convert to regular dataset
+    from datasets import Dataset
+    examples = list(streamed_dataset.take(args.n_examples))
+    dataset = Dataset.from_list(examples)
+    logger.info(f"  ✓ Fetched {len(dataset)} examples via streaming")
 
     train_dataset = dataset.shuffle(seed=args.seed).map(
         preprocess_function,
