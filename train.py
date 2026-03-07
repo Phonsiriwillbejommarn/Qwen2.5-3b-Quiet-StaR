@@ -407,41 +407,8 @@ def main():
 
     logger.info(f"Training dataset: {len(train_dataset)} examples")
 
-    # Evaluation datasets
-    logger.info("Loading evaluation datasets...")
-    eval_datasets = {}
-
-    try:
-        eval_dataset_gsm = load_dataset(
-            "gsm8k", "main",
-            split="test",
-            cache_dir=os.path.join(args.cache_dir, "datasets"),
-        ).shuffle(seed=args.seed).select(range(100)).map(
-            preprocess_eval_function_gsm,
-            batched=True,
-            writer_batch_size=200,
-            remove_columns=["question", "answer"],
-        )
-        eval_datasets["gsm8k"] = eval_dataset_gsm
-        logger.info(f"GSM8K eval: {len(eval_dataset_gsm)} examples")
-    except Exception as e:
-        logger.warning(f"Could not load GSM8K: {e}")
-
-    try:
-        eval_dataset_csqa = load_dataset(
-            "tau/commonsense_qa", "default",
-            split="validation",
-            cache_dir=os.path.join(args.cache_dir, "datasets"),
-        ).shuffle(seed=args.seed).select(range(100)).map(
-            preprocess_eval_function_csqa,
-            batched=True,
-            writer_batch_size=200,
-            remove_columns=["id", "question", "question_concept", "choices", "answerKey"],
-        )
-        eval_datasets["csqa"] = eval_dataset_csqa
-        logger.info(f"CommonsenseQA eval: {len(eval_dataset_csqa)} examples")
-    except Exception as e:
-        logger.warning(f"Could not load CommonsenseQA: {e}")
+    # Evaluation skipped for early training phase
+    eval_datasets = None
 
     # ================================================================
     # Training Arguments (optimized for Qwen2.5-3B on H200)
