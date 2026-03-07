@@ -182,6 +182,8 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
         self.tokenized_thought_prefix = None
         self.reinforce_temperature = 3.0
         self.base_loss_beta = 1.0
+        self.entropy_reg_beta = 0.03  # Entropy regularization to prevent token collapse
+        self.repetition_penalty = 1.2  # Penalize repeated tokens in thought generation
 
         # Residual mode flags (exactly one should be True)
         self.cumulative_residual = False
@@ -577,6 +579,16 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
             if torch.isnan(rm_logits).any():
                 rm_logits = torch.clamp(torch.nan_to_num(rm_logits, nan=0.0), min=-30.0, max=30.0)
 
+            # Repetition penalty: discourage sampling the same token again
+            if self.training and ahead_idx > 0 and len(sampled_token_history) > 0:
+                last_tokens = sampled_token_history[-1]  # [batch_size * seq_len]
+                for i in range(rm_logits.view(-1, rm_logits.size(-1)).size(0)):
+                    token_id = last_tokens[i].item()
+                    if rm_logits.view(-1, rm_logits.size(-1))[i, token_id] > 0:
+                        rm_logits.view(-1, rm_logits.size(-1))[i, token_id] /= self.repetition_penalty
+                    else:
+                        rm_logits.view(-1, rm_logits.size(-1))[i, token_id] *= self.repetition_penalty
+
             if self.tokenizer_has_start_thought_token:
                 rm_logits[..., self.start_token_id] = -1e10
             if self.tokenizer_has_end_thought_token:
@@ -633,7 +645,13 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                 if torch.isnan(probabilities_2d).any():
                     fallback_idx = torch.nan_to_num(sample_probs, nan=0.0).argmax(dim=-1)
                     probabilities_2d = F.one_hot(fallback_idx, num_classes=self.vocab_size).to(sample_probs.dtype)
-                    
+
+                # Entropy regularization: encourage diverse thought tokens
+                if self.training and self.entropy_reg_beta > 0:
+                    soft_probs = F.softmax(sample_probs.float(), dim=-1)
+                    entropy = -(soft_probs * torch.log(soft_probs + 1e-10)).sum(dim=-1).mean()
+                    loss = loss - self.entropy_reg_beta * entropy
+
                 if self.gumbel_detach:
                     probabilities_2d = probabilities_2d.detach()
 
