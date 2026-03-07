@@ -475,6 +475,22 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                 shift_labels_flat[shift_labels_flat == self.tokenizer.pad_token_id] = -100
                 shift_labels_flat = shift_labels_flat.to(shift_logits_flat.device)
 
+                # Validations: PyTorch requires labels to be in [0, vocab_size-1] or equal to ignore_index=-100
+                invalid_labels = (shift_labels_flat < 0) & (shift_labels_flat != -100)
+                if invalid_labels.any():
+                    print(f"[{ahead_idx}] WARNING: Invalid negative labels detected! Masking them to -100.")
+                    shift_labels_flat[invalid_labels] = -100
+                
+                out_of_bounds = shift_labels_flat >= self.config.vocab_size
+                if out_of_bounds.any():
+                    print(f"[{ahead_idx}] WARNING: Out of bounds labels detected! Masking them to -100.")
+                    shift_labels_flat[out_of_bounds] = -100
+
+                # DEBUG: Catch NaN inside Phase 2 Logits Right Before CE
+                if torch.isnan(shift_logits_flat).any():
+                    print(f"[{ahead_idx}] NaN DETECTED inside shift_logits_flat before cross entropy. Clamping to 0.0.")
+                    shift_logits_flat = torch.nan_to_num(shift_logits_flat, nan=0.0)
+
                 unreduced_loss = loss_fct(
                     shift_logits_flat, shift_labels_flat
                 ).reshape(logits.shape[0], -1)
@@ -483,7 +499,10 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                     previous_loss = unreduced_loss.clone().detach()
 
                 # Guard unreduced_loss against NaNs explicitly before taking mean
-                unreduced_loss = torch.nan_to_num(unreduced_loss, nan=0.0)
+                if torch.isnan(unreduced_loss).any():
+                    print(f"[{ahead_idx}] unreduced_loss generated NaNs! Replacing with 0.0...")
+                    unreduced_loss = torch.nan_to_num(unreduced_loss, nan=0.0)
+                
                 cur_loss = loss_mean(unreduced_loss)
                 
                 if torch.isnan(cur_loss) or cur_loss.item() == 0.0:
