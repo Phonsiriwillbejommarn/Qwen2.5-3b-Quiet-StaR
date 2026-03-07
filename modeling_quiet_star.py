@@ -20,7 +20,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from torch.nn import CrossEntropyLoss
 
-from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, AutoConfig, GenerationMixin
 from transformers.models.qwen2.modeling_qwen2 import (
     Qwen2PreTrainedModel,
     Qwen2Model,
@@ -57,7 +57,7 @@ def loss_mean(x):
 # Quiet-STAR Qwen2 Model
 # ============================================================================
 
-class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel):
+class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
     """
     Qwen2ForCausalLM patched with Quiet-STAR thought generation.
 
