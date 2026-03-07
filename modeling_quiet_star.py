@@ -73,8 +73,6 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
     - Start/end thought tokens should be masked during generation
     """
 
-    _tied_weights_keys = ["lm_head.weight"]
-
     def __init__(self, config: QuietStarConfig):
         super().__init__(config)
         self.model = Qwen2Model(config)
