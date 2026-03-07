@@ -465,6 +465,7 @@ def main():
         report_to="wandb" if args.use_wandb else "none",
         run_name=f"qwen2.5-3b_n={args.n_ahead}_nt={args.n_ahead_talk}_np={args.n_passes}",
         auto_find_batch_size=False,  # Disable to prevent crash loop when memory is tight
+        remove_unused_columns=False, # Required for our custom dataset mapping
         # HuggingFace Hub — push checkpoints for backup
         push_to_hub=args.hf_repo_id is not None,
         hub_model_id=args.hf_repo_id,
