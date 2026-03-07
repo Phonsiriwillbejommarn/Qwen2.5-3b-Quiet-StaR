@@ -67,6 +67,8 @@ def loss_mean(x):
 # ============================================================================
 
 class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
+    _tied_weights_keys = ["lm_head.weight"]
+
     """
     Qwen2ForCausalLM patched with Quiet-STAR thought generation.
 
