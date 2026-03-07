@@ -44,13 +44,22 @@ logger = hf_logging.get_logger(__name__)
 def nonzero_mean(x, axis=None):
     """Compute mean of non-zero elements along an axis."""
     if axis is not None:
-        return x.sum(axis) / (x != 0).float().sum(axis).clamp(min=1)
-    return x.sum() / (x != 0).float().sum().clamp(min=1)
+        den = (x != 0).float().sum(axis)
+        den = torch.where(den == 0, torch.ones_like(den), den)
+        return x.sum(axis) / den
+    
+    den = (x != 0).float().sum()
+    if den == 0:
+        return x.sum() * 0.0 # Return strong 0 rather than NaN
+    return x.sum() / den
 
 
 def loss_mean(x):
     """Compute mean of non-zero loss values."""
-    return x.sum() / (x != 0).float().sum().clamp(min=1)
+    den = (x != 0).float().sum()
+    if den == 0:
+        return x.sum() * 0.0
+    return x.sum() / den
 
 
 # ============================================================================
@@ -468,6 +477,9 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                     previous_loss = unreduced_loss.clone().detach()
 
                 cur_loss = loss_mean(unreduced_loss)
+                if torch.isnan(cur_loss) or cur_loss.item() == 0.0:
+                    print(f"[DEBUG STEP {self.training_steps}] cur_loss for thought-augmented pred is {cur_loss.item()}")
+                    
                 loss = loss + cur_loss
 
                 # ============ REINFORCE Policy Gradient ============
@@ -636,6 +648,9 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                 cur_policy_loss = -action_loglik[:, :min_len] * policy_reward[:, :min_len]
                 policy_loss = loss_mean(cur_policy_loss)
                 loss = loss + policy_loss
+                
+                if self.training and self.training_steps % self.n_tokens_print == 0:
+                    print(f"[DEBUG POLICY] Added policy_loss: {policy_loss.item()} | new total loss: {loss.item()}")
 
         # ============================================================
         # Base Loss (standard next-token prediction)
@@ -656,7 +671,15 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                 shift_labels_base[shift_labels_base == self.tokenizer.pad_token_id] = -100
                 loss_fct_base = CrossEntropyLoss(ignore_index=-100)
                 
-            base_loss = loss_fct_base(shift_logits_base, shift_labels_base)
+            base_loss_raw = loss_fct_base(shift_logits_base, shift_labels_base)
+            
+            if torch.isnan(base_loss_raw) or base_loss_raw.item() == 0.0:
+                 # Debug if base loss itself is the culprit
+                 print(f"[DEBUG] Base Loss is {base_loss_raw.item()}! Shift_labels: {shift_labels_base[:10]}")
+                 base_loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
+            else:
+                 base_loss = base_loss_raw
+                 
             loss = loss + self.base_loss_beta * base_loss
 
         # ============================================================
@@ -668,8 +691,12 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
             if self.training_steps % self.n_tokens_print == 0:
                 if base_loss is not None:
                     log_dict["train/base_loss"] = base_loss.item()
+                    log_dict["train/policy_loss"] = (loss - self.base_loss_beta * base_loss).item() if loss != 0 else 0.0
                 log_dict["train/total_loss"] = loss.item()
                 log_dict["train/training_steps"] = self.training_steps
+                
+                # Debug hard NaN / 0 loss issues:
+                print(f"[DEBUG STEP {self.training_steps}] Total Loss: {loss.item()} | Base Loss: {base_loss.item() if base_loss is not None else 'N/A'}")
 
                 if self.wandb_enabled:
                     try:
