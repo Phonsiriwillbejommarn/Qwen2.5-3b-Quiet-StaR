@@ -458,10 +458,9 @@ def main():
         warmup_steps=args.warmup_steps,
         weight_decay=args.weight_decay,
         label_names=["labels"],
-        include_inputs_for_metrics=True,
         logging_steps=args.eval_and_logging_steps,
         eval_steps=args.eval_and_logging_steps,
-        evaluation_strategy="steps" if eval_datasets else "no",
+        eval_strategy="steps" if eval_datasets else "no",
         save_steps=args.save_steps,
         save_total_limit=5,         # Keep last 5 checkpoints
         bf16=True,
