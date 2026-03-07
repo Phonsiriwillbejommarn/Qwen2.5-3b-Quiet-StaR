@@ -478,6 +478,7 @@ def main():
         dataloader_num_workers=4,
         dataloader_pin_memory=True,
         gradient_checkpointing=True, # Enable memory savings
+        eval_accumulation_steps=4,   # PREVENT OOM DURING EVALUATION (offloads predictions to CPU regularly)
         report_to="wandb" if args.use_wandb else "none",
         run_name=f"qwen2.5-3b_n={args.n_ahead}_nt={args.n_ahead_talk}_np={args.n_passes}",
         auto_find_batch_size=False,  # Disable to prevent crash loop when memory is tight
