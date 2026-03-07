@@ -475,7 +475,6 @@ def main():
         hub_model_id=args.hf_repo_id,
         hub_strategy="checkpoint",   # Push every save_steps
         hub_private_repo=True,       # Keep repo private
-        save_safetensors=True,       # Efficient checkpoint format
     )
 
     # ================================================================
