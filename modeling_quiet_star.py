@@ -420,9 +420,10 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                     residual_logits = residual_logits.to(logits.device)
 
                     if self.use_weighted_talk_head:
+                        thought_weight = torch.sigmoid(residual_logits)
                         residual_logits = (
-                            cur_base_hidden * (1 - residual_logits) +
-                            talk_hidden_states * residual_logits
+                            cur_base_hidden * (1 - thought_weight) +
+                            talk_hidden_states * thought_weight
                         )
                         residual_logits = self._apply_head(
                             self.lm_head, residual_logits,

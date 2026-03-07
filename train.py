@@ -215,7 +215,8 @@ def model_init(args, tokenizer):
         )
         # Add optional attributes if they exist
         for attr in ['rope_theta', 'attention_dropout', 'attn_implementation',
-                     'sliding_window', 'use_sliding_window', 'max_window_layers']:
+                     'sliding_window', 'use_sliding_window', 'max_window_layers',
+                     'tie_word_embeddings']:
             if hasattr(base_config, attr):
                 config_kwargs[attr] = getattr(base_config, attr)
         if 'attn_implementation' not in config_kwargs:
