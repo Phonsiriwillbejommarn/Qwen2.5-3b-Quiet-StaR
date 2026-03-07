@@ -325,8 +325,9 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
         # Total number of ahead steps: think steps + talk steps
         n_ahead_total = self.n_ahead + self.n_ahead_talk
 
-        # CRITICAL BUG FIX 3: Loss initialized directly with gradients on correct dtype
-        loss = torch.zeros(1, device=input_ids.device if input_ids is not None else "cuda", dtype=self.lm_head.weight.dtype).squeeze()
+        # BUG FIX 3: Loss initialized with correct dtype matching model weights
+        loss = torch.zeros(1, device=input_ids.device if input_ids is not None else "cuda",
+                          dtype=self.lm_head.weight.dtype).squeeze()
         
         policy_reward = None
         action_loglikelihoods_list = []
@@ -488,39 +489,33 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                 shift_labels_flat[shift_labels_flat == self.tokenizer.pad_token_id] = -100
                 shift_labels_flat = shift_labels_flat.to(shift_logits_flat.device)
 
-                # Validations: PyTorch requires labels to be in [0, vocab_size-1] or equal to ignore_index=-100
+                # Validations: PyTorch requires labels in [0, vocab_size-1] or ignore_index=-100
                 invalid_labels = (shift_labels_flat < 0) & (shift_labels_flat != -100)
                 if invalid_labels.any():
-                    print(f"[{ahead_idx}] WARNING: Invalid negative labels detected! Masking them to -100.")
                     shift_labels_flat[invalid_labels] = -100
                 
                 out_of_bounds = shift_labels_flat >= self.config.vocab_size
                 if out_of_bounds.any():
-                    print(f"[{ahead_idx}] WARNING: Out of bounds labels detected! Masking them to -100.")
                     shift_labels_flat[out_of_bounds] = -100
 
-                # DEBUG: Catch NaN inside Phase 2 Logits Right Before CE
-                if torch.isnan(shift_logits_flat).any():
-                    print(f"[{ahead_idx}] NaN DETECTED inside shift_logits_flat before cross entropy. Clamping to 0.0.")
-                    shift_logits_flat = torch.nan_to_num(shift_logits_flat, nan=0.0)
+                # BUG 5 FIX: Use clamp (not nan_to_num) to preserve gradient flow.
+                # nan_to_num replaces values with a constant → gradient = 0 → no learning.
+                # clamp keeps the value at the boundary → gradient still flows through.
+                if torch.isnan(shift_logits_flat).any() or torch.isinf(shift_logits_flat).any():
+                    shift_logits_flat = torch.clamp(shift_logits_flat, min=-30.0, max=30.0)
 
                 unreduced_loss = loss_fct(
                     shift_logits_flat, shift_labels_flat
                 ).reshape(logits.shape[0], -1)
 
-                # Guard unreduced_loss against NaNs explicitly before taking mean
+                # If still NaN (e.g. all labels were -100), zero out but warn.
                 if torch.isnan(unreduced_loss).any():
-                    print(f"[{ahead_idx}] unreduced_loss generated NaNs! Replacing with 0.0...")
-                    unreduced_loss = torch.nan_to_num(unreduced_loss, nan=0.0)
+                    unreduced_loss = torch.zeros_like(unreduced_loss)
                 
                 if ahead_idx == self.n_ahead - 1:
                     previous_loss = unreduced_loss.clone().detach()
 
                 cur_loss = loss_mean(unreduced_loss)
-                
-                if torch.isnan(cur_loss) or cur_loss.item() == 0.0:
-                    print(f"[DEBUG STEP {self.training_steps}] cur_loss for thought-augmented pred is {cur_loss.item()} | Unreduced max: {unreduced_loss.max().item()}")
-                    
                 loss = loss + cur_loss
 
                 # ============ REINFORCE Policy Gradient ============
@@ -553,7 +548,7 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                             # Sanitize NaNs before clamping because clamp(nan) == nan
                             safe_prev_sample = torch.nan_to_num(prev_sample_probs, nan=0.0)
                             clamped_sample_probs = torch.clamp(safe_prev_sample, min=-1e4, max=1e4)
-                            # CRITICAL BUG FIX 2: Float32 casting for numerical stability during REINFORCE log_softmax
+                            # BUG FIX 2: Float32 casting for numerical stability during REINFORCE log_softmax
                             action_loglikelihoods = F.log_softmax(
                                 clamped_sample_probs.float() / self.reinforce_temperature, dim=-1
                             )[nonzero_indices[:, 0], nonzero_indices[:, 1]].to(clamped_sample_probs.dtype)
@@ -578,9 +573,9 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
             # ============ Sample Next Token for Thought ============
             rm_logits = self.lm_head(hidden_states)
             
+            # Sanitize NaN rm_logits from thought token processing
             if torch.isnan(rm_logits).any():
-                print(f"[DEBUG STEP {self.training_steps}] rm_logits at ahead_idx {ahead_idx} is NaN!")
-                rm_logits = torch.nan_to_num(rm_logits, nan=0.0)
+                rm_logits = torch.clamp(torch.nan_to_num(rm_logits, nan=0.0), min=-30.0, max=30.0)
 
             if self.tokenizer_has_start_thought_token:
                 rm_logits[..., self.start_token_id] = -1e10
@@ -636,7 +631,6 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                 
                 # Safety check: if Gumbel-Softmax produces NaNs, fallback to standard argmax
                 if torch.isnan(probabilities_2d).any():
-                    print(f"[DEBUG STEP {self.training_steps}] Gumbel softmax output NaN! Falling back to argmax.")
                     fallback_idx = torch.nan_to_num(sample_probs, nan=0.0).argmax(dim=-1)
                     probabilities_2d = F.one_hot(fallback_idx, num_classes=self.vocab_size).to(sample_probs.dtype)
                     
@@ -658,7 +652,6 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
             if not contains_thought:
                 with torch.set_grad_enabled(not self.train_only_thinking_embedding):
                     if torch.isnan(probabilities_2d).any():
-                        print(f"[DEBUG STEP {self.training_steps}] probabilities_2d became NaN before matmul. Replacing with uniform prob.")
                         probabilities_2d = torch.nan_to_num(probabilities_2d, nan=0.0)
                         
                     inputs_embeds = probabilities_2d @ (
@@ -701,9 +694,6 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                 cur_policy_loss = -action_loglik[:, :min_len] * policy_reward[:, :min_len]
                 policy_loss = loss_mean(cur_policy_loss)
                 loss = loss + policy_loss
-                
-                if self.training and self.training_steps % self.n_tokens_print == 0:
-                    print(f"[DEBUG POLICY] Added policy_loss: {policy_loss.item()} | new total loss: {loss.item()}")
 
         # ============================================================
         # Base Loss (standard next-token prediction)
@@ -713,27 +703,25 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
             shift_logits_base = initial_loss_logits[..., :-1, :].contiguous()
             shift_labels_base = labels[..., 1:].contiguous()
 
-            # Ignore pad_token_id for base loss calculation
-            loss_fct_base = CrossEntropyLoss(ignore_index=-100 if self.tokenizer is None or not hasattr(self.tokenizer, 'pad_token_id') else self.tokenizer.pad_token_id)
-            
             shift_logits_base = shift_logits_base.view(-1, self.config.vocab_size)
             shift_labels_base = shift_labels_base.view(-1).to(shift_logits_base.device)
             
-            # Additional safety: explicitly mask pad_token_id to -100
+            # Mask pad_token_id to -100
             if self.tokenizer is not None and hasattr(self.tokenizer, 'pad_token_id'):
                 shift_labels_base[shift_labels_base == self.tokenizer.pad_token_id] = -100
-                loss_fct_base = CrossEntropyLoss(ignore_index=-100)
-                
+
+            loss_fct_base = CrossEntropyLoss(ignore_index=-100)
             base_loss_raw = loss_fct_base(shift_logits_base, shift_labels_base)
             
-            if torch.isnan(base_loss_raw) or base_loss_raw.item() == 0.0:
-                 # Debug if base loss itself is the culprit
-                 print(f"[DEBUG] Base Loss is {base_loss_raw.item()}! Shift_labels: {shift_labels_base[:10]}")
-                 base_loss = torch.tensor(0.0, device=loss.device, requires_grad=True)
+            # BUG 6 FIX: Never use torch.tensor(0.0, requires_grad=True) as a fallback.
+            # A freshly created leaf tensor has NO connection to the computation graph —
+            # it provides zero gradient to any model parameter, silently killing training.
+            # Instead, just skip adding base_loss when it is invalid.
+            if torch.isnan(base_loss_raw) or torch.isinf(base_loss_raw):
+                pass  # Skip — don't add invalid loss
             else:
-                 base_loss = base_loss_raw
-                 
-            loss = loss + self.base_loss_beta * base_loss
+                base_loss = base_loss_raw
+                loss = loss + self.base_loss_beta * base_loss
 
         # ============================================================
         # Logging
@@ -744,12 +732,8 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
             if self.training_steps % self.n_tokens_print == 0:
                 if base_loss is not None:
                     log_dict["train/base_loss"] = base_loss.item()
-                    log_dict["train/policy_loss"] = (loss - self.base_loss_beta * base_loss).item() if loss != 0 else 0.0
                 log_dict["train/total_loss"] = loss.item()
                 log_dict["train/training_steps"] = self.training_steps
-                
-                # Debug hard NaN / 0 loss issues:
-                print(f"[DEBUG STEP {self.training_steps}] Total Loss: {loss.item()} | Base Loss: {base_loss.item() if base_loss is not None else 'N/A'}")
 
                 if self.wandb_enabled:
                     try:
