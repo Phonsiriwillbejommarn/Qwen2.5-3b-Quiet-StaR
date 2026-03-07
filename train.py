@@ -59,9 +59,9 @@ DEFAULT_CONFIG = {
     "n_ahead_talk": 4,      # Tokens ahead to predict after thought
     "n_passes": 2,          # Number of forward passes
 
-    # Training — larger batch/seq possible with 3B model on H200
-    "batch_size": 8,        # Per-device batch size
-    "full_batch_size": 16,  # Total effective batch size
+    # Training — optimize memory for H200
+    "batch_size": 1,        # Per-device batch size (reduced from 8 to prevent OOM)
+    "full_batch_size": 16,  # Total effective batch size (uses gradient accumulation)
     "learning_rate": 1e-6,
     "max_steps": 100000,
     "warmup_steps": 20,
@@ -477,9 +477,10 @@ def main():
         bf16_full_eval=True,
         dataloader_num_workers=4,
         dataloader_pin_memory=True,
+        gradient_checkpointing=True, # Enable memory savings
         report_to="wandb" if args.use_wandb else "none",
         run_name=f"qwen2.5-3b_n={args.n_ahead}_nt={args.n_ahead_talk}_np={args.n_passes}",
-        auto_find_batch_size=True,
+        auto_find_batch_size=False,  # Disable to prevent crash loop when memory is tight
         # HuggingFace Hub — push checkpoints for backup
         push_to_hub=args.hf_repo_id is not None,
         hub_model_id=args.hf_repo_id,
