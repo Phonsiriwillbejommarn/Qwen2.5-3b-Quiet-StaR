@@ -379,9 +379,11 @@ def main():
     # ================================================================
     # Load tokenizer
     # ================================================================
-    logger.info(f"Loading tokenizer from {args.model_name}")
+    # Always load tokenizer from the original Qwen repository to avoid corrupted tokenizer saves on Hub
+    original_base_model = "Qwen/Qwen2.5-3B"
+    logger.info(f"Loading tokenizer from {original_base_model}")
     tokenizer = AutoTokenizer.from_pretrained(
-        args.model_name,
+        original_base_model,
         cache_dir=args.cache_dir,
         trust_remote_code=True,
     )
