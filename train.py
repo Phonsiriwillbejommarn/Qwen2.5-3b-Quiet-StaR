@@ -56,7 +56,7 @@ DEFAULT_CONFIG = {
     "model_name": "Qwen/Qwen2.5-3B",
 
     # Thought parameters
-    "n_ahead": 32,           # Number of thought tokens (including start/end)
+    "n_ahead": 8,            # Number of thought tokens (reduced from 32 for 3B stability)
     "n_ahead_talk": 4,      # Tokens ahead to predict after thought
     "n_passes": 4,          # Number of parallel thought paths to generate and evaluate
 
