@@ -22,6 +22,7 @@ import argparse
 import logging
 
 import torch
+import torch.nn as nn
 torch.backends.cuda.matmul.allow_tf32 = True
 
 from transformers import (
@@ -271,10 +272,12 @@ def model_init(args, tokenizer):
             del base_model
             torch.cuda.empty_cache()
 
-        # Handle weight tying explicitly to prevent missing lm_head weight
+        # Copy embed_tokens weights INTO lm_head (not tie) to avoid shared tensor save crash.
+        # Setting tie_word_embeddings=False so transformers doesn't try to re-tie them.
         if getattr(quiet_config, "tie_word_embeddings", False):
-            logger.info("Tying word embeddings (lm_head.weight = embed_tokens.weight)")
-            model.lm_head.weight = model.model.embed_tokens.weight
+            logger.info("Copying embed_tokens weights to lm_head (untied for Quiet-STAR training)")
+            model.lm_head.weight = nn.Parameter(model.model.embed_tokens.weight.data.clone())
+            model.config.tie_word_embeddings = False
 
         # Convert to bfloat16 and move to GPU
         model = model.to(dtype=torch.bfloat16)
