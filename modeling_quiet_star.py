@@ -210,6 +210,9 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
         self.eval_log_dict = {}
         self.config_params = {}
 
+        # Banned token mask for thought sampling (built lazily)
+        self._banned_thought_tokens_mask = None
+
         # Post init
         self.post_init()
 
@@ -241,6 +244,49 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
 
     def get_decoder(self):
         return self.model
+
+    def _build_banned_thought_tokens_mask(self):
+        """
+        Build a boolean mask of tokens that should NOT be used in thought generation.
+        Bans: emoji, excessive whitespace/newlines, special unicode, control characters.
+        Only allows: ASCII letters, digits, basic punctuation, common subword pieces.
+        """
+        if self.tokenizer is None:
+            return None
+        
+        banned = torch.zeros(self.vocab_size, dtype=torch.bool)
+        
+        for token_id in range(self.vocab_size):
+            try:
+                token_str = self.tokenizer.decode([token_id])
+            except Exception:
+                banned[token_id] = True
+                continue
+            
+            # Ban if contains emoji or high unicode (> U+2000)
+            has_bad_char = False
+            for ch in token_str:
+                cp = ord(ch)
+                # Allow ASCII printable (32-126) and common latin extended (128-591)
+                if cp > 591 and cp not in (8208, 8211, 8212, 8216, 8217, 8220, 8221):  # allow dashes/quotes
+                    has_bad_char = True
+                    break
+            
+            if has_bad_char:
+                banned[token_id] = True
+                continue
+            
+            # Ban pure whitespace tokens (except single space)
+            if token_str.strip() == '' and token_str != ' ':
+                banned[token_id] = True
+                continue
+            
+            # Ban tokens that are just newlines
+            if token_str.strip() == '' and '\n' in token_str:
+                banned[token_id] = True
+                continue
+        
+        return banned
 
     def _apply_head(self, head, states, detach=False):
         """Apply a linear head (lm_head-style) to hidden states."""
@@ -578,6 +624,14 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
             # Sanitize NaN rm_logits from thought token processing
             if torch.isnan(rm_logits).any():
                 rm_logits = torch.clamp(torch.nan_to_num(rm_logits, nan=0.0), min=-30.0, max=30.0)
+
+            # Ban cheap tokens (emoji, excessive newlines, unicode) from thought sampling
+            if self.training and ahead_idx < self.n_ahead - 1:
+                if self._banned_thought_tokens_mask is None:
+                    self._banned_thought_tokens_mask = self._build_banned_thought_tokens_mask()
+                if self._banned_thought_tokens_mask is not None:
+                    mask = self._banned_thought_tokens_mask.to(rm_logits.device)
+                    rm_logits[..., mask] = -1e10
 
             # Repetition penalty: discourage sampling the same token again
             if self.training and ahead_idx > 0 and len(sampled_token_history) > 0:
