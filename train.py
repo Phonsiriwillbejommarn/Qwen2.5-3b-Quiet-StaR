@@ -77,7 +77,7 @@ DEFAULT_CONFIG = {
     # Alternative: "open-web-math/open-web-math" for math-focused training
     "dataset_name": "HuggingFaceFW/fineweb-edu",
     "dataset_subset": "default",
-    "n_examples": 100000,    # Number of training examples
+    "n_examples": 10000,    # Number of training examples
 
     # Evaluation & checkpointing
     "logging_steps": 1,             # Log training metrics every step
@@ -270,6 +270,11 @@ def model_init(args, tokenizer):
             
             del base_model
             torch.cuda.empty_cache()
+
+        # Handle weight tying explicitly to prevent missing lm_head weight
+        if getattr(quiet_config, "tie_word_embeddings", False):
+            logger.info("Tying word embeddings (lm_head.weight = embed_tokens.weight)")
+            model.lm_head.weight = model.model.embed_tokens.weight
 
         # Convert to bfloat16 and move to GPU
         model = model.to(dtype=torch.bfloat16)
