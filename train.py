@@ -141,6 +141,9 @@ def parse_args():
     parser.add_argument("--no_wandb", action="store_true")
     parser.add_argument("--wandb_project", type=str, default=DEFAULT_CONFIG["wandb_project"])
     parser.add_argument("--seed", type=int, default=DEFAULT_CONFIG["seed"])
+    parser.add_argument("--use_start_thought_token", action=argparse.BooleanOptionalAction, default=DEFAULT_CONFIG["use_start_thought_token"])
+    parser.add_argument("--use_end_thought_token", action=argparse.BooleanOptionalAction, default=DEFAULT_CONFIG["use_end_thought_token"])
+    
     # HuggingFace Hub & Resume
     parser.add_argument("--hf_repo_id", type=str, default=DEFAULT_CONFIG["hf_repo_id"],
                         help="HuggingFace Hub repo to push checkpoints (e.g. your-name/quiet-star)")
