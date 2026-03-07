@@ -223,38 +223,52 @@ def model_init(args, tokenizer):
 
         quiet_config = QuietStarConfig(**config_kwargs)
 
-        # Load pretrained Qwen2.5-3B weights
-        from transformers import AutoModelForCausalLM as BaseAutoModel
-
-        logger.info("Loading pretrained Qwen2.5-3B weights...")
-        base_model = BaseAutoModel.from_pretrained(
-            args.model_name,
-            torch_dtype=torch.bfloat16,
-            cache_dir=args.cache_dir,
-            device_map="cpu",
-            trust_remote_code=True,
-            attn_implementation="sdpa",  # Use SDPA (no Flash Attention needed)
-        )
-
-        # Initialize our Quiet-STAR model
-        model = QuietStarQwen2ForCausalLM(quiet_config)
-
-        # Copy weights from base Qwen2 to our model
-        logger.info("Transferring weights to Quiet-STAR model...")
-        base_state_dict = base_model.state_dict()
-        model_state_dict = model.state_dict()
-
-        transferred = 0
-        for key in base_state_dict:
-            if key in model_state_dict and base_state_dict[key].shape == model_state_dict[key].shape:
-                model_state_dict[key] = base_state_dict[key]
-                transferred += 1
-        model.load_state_dict(model_state_dict, strict=False)
-        logger.info(f"Transferred {transferred} weight tensors from pretrained model")
-
-        # Free base model memory
-        del base_model
-        torch.cuda.empty_cache()
+        # Load pretrained weights into Quiet-STAR architecture
+        logger.info(f"Loading pretrained weights from {args.model_name}...")
+        try:
+            # Try to load directly (works perfectly if it's our trained HF Repo checkpoint)
+            # This preserves talk_head, start_embedding, and end_embedding
+            model = QuietStarQwen2ForCausalLM.from_pretrained(
+                args.model_name,
+                config=quiet_config,
+                torch_dtype=torch.bfloat16,
+                cache_dir=args.cache_dir,
+                device_map="cpu",
+                trust_remote_code=True,
+                attn_implementation="sdpa",
+                ignore_mismatched_sizes=True,
+            )
+            logger.info("✓ Successfully loaded weights directly into Quiet-STAR architecture (resuming heads/embeddings if present)")
+            
+        except Exception as e:
+            logger.warning(f"Direct load failed ({e}), falling back to manual weight transfer...")
+            from transformers import AutoModelForCausalLM as BaseAutoModel
+            
+            base_model = BaseAutoModel.from_pretrained(
+                args.model_name,
+                torch_dtype=torch.bfloat16,
+                cache_dir=args.cache_dir,
+                device_map="cpu",
+                trust_remote_code=True,
+                attn_implementation="sdpa",
+            )
+            
+            model = QuietStarQwen2ForCausalLM(quiet_config)
+            
+            logger.info("Transferring weights to Quiet-STAR model...")
+            base_state_dict = base_model.state_dict()
+            model_state_dict = model.state_dict()
+            
+            transferred = 0
+            for key in base_state_dict:
+                if key in model_state_dict and base_state_dict[key].shape == model_state_dict[key].shape:
+                    model_state_dict[key] = base_state_dict[key]
+                    transferred += 1
+            model.load_state_dict(model_state_dict, strict=False)
+            logger.info(f"Transferred {transferred} weight tensors from pretrained base model")
+            
+            del base_model
+            torch.cuda.empty_cache()
 
         # Convert to bfloat16 and move to GPU
         model = model.to(dtype=torch.bfloat16)
