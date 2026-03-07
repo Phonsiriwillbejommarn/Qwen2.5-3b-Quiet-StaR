@@ -295,6 +295,19 @@ def model_init(args, tokenizer):
                 model.resize_token_embeddings(len(tokenizer))
                 logger.info(f"Added {num_added} special tokens, resized embeddings to {len(tokenizer)}")
 
+        # Initialize thought embeddings from pretrained embedding statistics
+        # The default init (std=0.02) is FAR too small compared to real embeddings,
+        # causing NaN in attention when processed in bfloat16
+        with torch.no_grad():
+            embed_mean = model.model.embed_tokens.weight.float().mean(dim=0)
+            embed_std = model.model.embed_tokens.weight.float().std(dim=0).clamp(min=1e-6)
+            # start_embedding shape: [2, hidden_size] — [0] is the embedding, [1] is for reparam
+            model.start_embedding.data[0] = embed_mean.to(model.start_embedding.dtype)
+            model.start_embedding.data[1] = (embed_std * 0.1).to(model.start_embedding.dtype)
+            model.end_embedding.data[0] = embed_mean.to(model.end_embedding.dtype)
+            model.end_embedding.data[1] = (embed_std * 0.1).to(model.end_embedding.dtype)
+            logger.info(f"Initialized thought embeddings from pretrained embed stats (mean={embed_mean.norm():.4f})")
+
         # Set model attributes
         model.tokenizer = tokenizer
         model.n_ahead = n_ahead
