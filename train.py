@@ -184,21 +184,19 @@ def model_init(args, tokenizer):
         )
 
         # Create QuietStarConfig from base Qwen2 config
-        quiet_config = QuietStarConfig(
+        # Use getattr for attributes that may not exist in all transformers versions
+        config_kwargs = dict(
             vocab_size=base_config.vocab_size,
             hidden_size=base_config.hidden_size,
             intermediate_size=base_config.intermediate_size,
             num_hidden_layers=base_config.num_hidden_layers,
             num_attention_heads=base_config.num_attention_heads,
-            num_key_value_heads=base_config.num_key_value_heads,
-            hidden_act=base_config.hidden_act,
+            num_key_value_heads=getattr(base_config, 'num_key_value_heads', base_config.num_attention_heads),
+            hidden_act=getattr(base_config, 'hidden_act', 'silu'),
             max_position_embeddings=base_config.max_position_embeddings,
-            initializer_range=base_config.initializer_range,
-            rms_norm_eps=base_config.rms_norm_eps,
-            use_cache=False,  # Disable KV cache during training
-            rope_theta=base_config.rope_theta,
-            attention_dropout=getattr(base_config, 'attention_dropout', 0.0),
-            attn_implementation="sdpa",  # Use SDPA instead of Flash Attention
+            initializer_range=getattr(base_config, 'initializer_range', 0.02),
+            rms_norm_eps=getattr(base_config, 'rms_norm_eps', 1e-6),
+            use_cache=False,
             max_thoughts=n_ahead + n_ahead_talk + 1,
             merged_talk_heads=True,
             merged_lm_and_talk_heads=False,
@@ -210,6 +208,15 @@ def model_init(args, tokenizer):
             use_complex_talk_head=True,
             use_weighted_talk_head=True,
         )
+        # Add optional attributes if they exist
+        for attr in ['rope_theta', 'attention_dropout', 'attn_implementation',
+                     'sliding_window', 'use_sliding_window', 'max_window_layers']:
+            if hasattr(base_config, attr):
+                config_kwargs[attr] = getattr(base_config, attr)
+        if 'attn_implementation' not in config_kwargs:
+            config_kwargs['attn_implementation'] = 'sdpa'
+
+        quiet_config = QuietStarConfig(**config_kwargs)
 
         # Load pretrained Qwen2.5-3B weights
         from transformers import AutoModelForCausalLM as BaseAutoModel
