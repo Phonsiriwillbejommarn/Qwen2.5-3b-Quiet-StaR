@@ -20,8 +20,13 @@ from modeling_quiet_star import QuietStarQwen2ForCausalLM
 def load_model(model_path, device="cuda"):
     """Load trained Quiet-STAR model and tokenizer."""
 
-    print(f"Loading tokenizer from {model_path}...")
-    tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+    print(f"Loading tokenizer from Qwen/Qwen2.5-3B...")
+    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen2.5-3B", trust_remote_code=True)
+    
+    # Add special thought tokens to tokenizer just like in training
+    special_tokens_to_add = ['<|startthought|>', '<|endthought|>']
+    tokenizer.add_special_tokens({'additional_special_tokens': special_tokens_to_add})
+
     tokenizer.padding_side = "left"  # For generation
     if tokenizer.pad_token_id is None:
         tokenizer.pad_token_id = tokenizer.eos_token_id
