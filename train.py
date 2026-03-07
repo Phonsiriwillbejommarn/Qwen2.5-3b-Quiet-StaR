@@ -515,7 +515,7 @@ def main():
     logger.info(f"  Sequence length: {args.max_length}")
     if torch.cuda.is_available():
         logger.info(f"  Device: {torch.cuda.get_device_name(0)}")
-        gpu_mem = torch.cuda.get_device_properties(0).total_mem / 1024**3
+        gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1024**3
         logger.info(f"  GPU Memory: {gpu_mem:.1f} GB")
     if args.resume_from_checkpoint:
         logger.info(f"⚡ RESUMING from {args.resume_from_checkpoint}")
