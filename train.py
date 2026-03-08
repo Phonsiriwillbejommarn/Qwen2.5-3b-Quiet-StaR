@@ -58,12 +58,12 @@ DEFAULT_CONFIG = {
     # Thought parameters
     "n_ahead": 8,            # Number of thought tokens (reduced from 32 for 3B stability)
     "n_ahead_talk": 4,      # Tokens ahead to predict after thought
-    "n_passes": 2,          # Number of parallel thought paths to generate and evaluate (reduced from 4 for speed)
+    "n_passes": 4,          # Number of parallel thought paths to generate and evaluate
 
     # Training — optimize memory for H200
     "batch_size": 2,        # Per-device batch size (increased to utilize the 141GB VRAM)
     "full_batch_size": 16,  # Total effective batch size (uses gradient accumulation)
-    "learning_rate": 1e-6,
+    "learning_rate": 1e-5,
     "max_steps": 100000,
     "warmup_steps": 20,
     "weight_decay": 0.001,
