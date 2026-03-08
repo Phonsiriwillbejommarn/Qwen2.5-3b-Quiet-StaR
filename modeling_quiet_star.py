@@ -584,6 +584,10 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
 
             # Ban cheap tokens (emoji, excessive newlines, unicode) from thought sampling
             if self.training and ahead_idx < self.n_ahead - 1:
+                # Debug print for the very first step to ensure we aren't frozen
+                if self.training_steps == 0:
+                    print(f"  [Debug] Processing ahead_idx {ahead_idx}/{n_ahead_total-1}...")
+     
                 if self._banned_thought_tokens_mask is not None:
                     mask = self._banned_thought_tokens_mask.to(rm_logits.device)
                     rm_logits[..., mask] = -1e10
