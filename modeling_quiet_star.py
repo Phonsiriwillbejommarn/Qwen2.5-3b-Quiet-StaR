@@ -583,34 +583,39 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
             if torch.isnan(rm_logits).any():
                 rm_logits = torch.clamp(torch.nan_to_num(rm_logits, nan=0.0), min=-30.0, max=30.0)
 
-            # Clone to avoid inplace modification errors during backward pass
-            rm_logits = rm_logits.clone()
+            # === ALL modifications use NON-INPLACE ops to preserve autograd ===
+            # Build additive bias (detached, no gradient needed for masks)
+            logit_bias = torch.zeros(self.vocab_size, device=rm_logits.device, dtype=rm_logits.dtype)
 
-            # Ban cheap tokens (emoji, excessive newlines, unicode) from thought sampling
+            # Ban cheap tokens
             if self.training and ahead_idx < self.n_ahead - 1:
                 if self._banned_thought_tokens_mask is not None:
-                    mask = self._banned_thought_tokens_mask.to(rm_logits.device)
-                    rm_logits[..., mask] = -1e10
+                    logit_bias.masked_fill_(self._banned_thought_tokens_mask.to(rm_logits.device), -1e10)
 
-            # Repetition penalty: discourage sampling the same token again (vectorized)
+            # Mask start/end thought tokens
+            if self.tokenizer_has_start_thought_token:
+                logit_bias[self.start_token_id] = -1e10
+            if self.tokenizer_has_end_thought_token:
+                logit_bias[self.end_token_id] = -1e10
+
+            # Non-inplace addition preserves gradient graph
+            rm_logits = rm_logits + logit_bias
+
+            # Repetition penalty as detached additive adjustment
             if self.training and ahead_idx > 0 and len(sampled_token_history) > 0:
-                last_tokens = sampled_token_history[-1].to(rm_logits.device)  # [batch_size * seq_len]
-                flat_logits = rm_logits.view(-1, rm_logits.size(-1))
-                if last_tokens.shape[0] == flat_logits.shape[0]:
-                    # Gather logits for the last tokens
-                    token_logits = flat_logits.gather(1, last_tokens.unsqueeze(1)).squeeze(1)
-                    # Apply penalty: divide if positive, multiply if negative
+                last_tokens = sampled_token_history[-1].to(rm_logits.device)
+                flat_logits_detached = rm_logits.detach().view(-1, rm_logits.size(-1))
+                if last_tokens.shape[0] == flat_logits_detached.shape[0]:
+                    token_logits = flat_logits_detached.gather(1, last_tokens.unsqueeze(1)).squeeze(1)
                     penalized = torch.where(
                         token_logits > 0,
                         token_logits / self.repetition_penalty,
                         token_logits * self.repetition_penalty
                     )
-                    flat_logits.scatter_(1, last_tokens.unsqueeze(1), penalized.unsqueeze(1))
-
-            if self.tokenizer_has_start_thought_token:
-                rm_logits[..., self.start_token_id] = -1e10
-            if self.tokenizer_has_end_thought_token:
-                rm_logits[..., self.end_token_id] = -1e10
+                    diff = penalized - token_logits
+                    rep_bias = torch.zeros_like(flat_logits_detached)
+                    rep_bias.scatter_(1, last_tokens.unsqueeze(1), diff.unsqueeze(1))
+                    rm_logits = rm_logits + rep_bias.view_as(rm_logits)
 
             probabilities = rm_logits
             if probabilities_2d is not None:
