@@ -584,10 +584,6 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
 
             # Ban cheap tokens (emoji, excessive newlines, unicode) from thought sampling
             if self.training and ahead_idx < self.n_ahead - 1:
-                # Debug print for the very first step to ensure we aren't frozen
-                if self.training_steps == 0:
-                    print(f"  [Debug] Processing ahead_idx {ahead_idx}/{n_ahead_total-1}...")
-     
                 if self._banned_thought_tokens_mask is not None:
                     mask = self._banned_thought_tokens_mask.to(rm_logits.device)
                     rm_logits[..., mask] = -1e10
@@ -638,9 +634,9 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                         device=shift_labels_talk.device
                     )
                     new_rm_tokens = torch.cat([shift_labels_talk, padding], dim=-1)
-                    probabilities_2d = F.one_hot(
-                        new_rm_tokens, num_classes=self.vocab_size
-                    ).reshape(-1, self.vocab_size).to(probabilities_2d.dtype)
+                    # Instead of creating a massive one-hot tensor [..., 151665] which OOMs/freezes,
+                    # we just keep the indices and will look up embeddings directly later
+                    probabilities_2d = new_rm_tokens.reshape(-1)
                     skip_sampling = True
                 else:
                     continue
@@ -682,12 +678,16 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
 
             if not contains_thought:
                 with torch.set_grad_enabled(not self.train_only_thinking_embedding):
-                    if torch.isnan(probabilities_2d).any():
-                        probabilities_2d = torch.nan_to_num(probabilities_2d, nan=0.0)
-                        
-                    inputs_embeds = probabilities_2d @ (
-                        self.model.embed_tokens.weight.to(probabilities.device).to(probabilities.dtype)
-                    )
+                    if ahead_idx >= self.n_ahead - 1 and probabilities_2d.dim() == 1:
+                        # Direct lookup for talk phase (avoids massive 151k one-hot matmul)
+                        inputs_embeds = self.model.embed_tokens(probabilities_2d)
+                    else:
+                        if torch.isnan(probabilities_2d).any():
+                            probabilities_2d = torch.nan_to_num(probabilities_2d, nan=0.0)
+                            
+                        inputs_embeds = probabilities_2d @ (
+                            self.model.embed_tokens.weight.to(probabilities.device).to(probabilities.dtype)
+                        )
             else:
                 cur_thought_embedding = start_embedding if contains_start else end_embedding
 
