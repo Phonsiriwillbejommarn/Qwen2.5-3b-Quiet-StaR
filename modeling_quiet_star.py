@@ -643,7 +643,9 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
 
             temperature = self.gumbel_temperature if self.training else 0.001
             prev_sample_probs = sample_probs
-            sample_probs = probabilities_2d
+            if not skip_sampling or (skip_sampling and probabilities_2d.dim() > 1):
+                sample_probs = probabilities_2d
+            # If skip_sampling and dim == 1, probabilities_2d is just direct token indices for talk phase
 
             if ahead_idx < self.n_ahead - 1 and not skip_sampling:
                 probabilities_2d = F.gumbel_softmax(
@@ -664,16 +666,21 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                 if self.gumbel_detach:
                     probabilities_2d = probabilities_2d.detach()
 
-            sampled_token_history.append(probabilities_2d.argmax(dim=-1).detach().cpu())
-
-            contains_start = (
-                self.use_start_thought_token and
-                (probabilities_2d[..., self.start_token_id].sum() > 0)
-            )
-            contains_end = (
-                self.use_end_thought_token and
-                (probabilities_2d[..., self.end_token_id].sum() > 0)
-            )
+            if probabilities_2d.dim() == 1:
+                # In talk phase, probabilities_2d is a 1D tensor of token indices
+                sampled_token_history.append(probabilities_2d.detach().cpu())
+                contains_start = self.use_start_thought_token and (probabilities_2d == self.start_token_id).any()
+                contains_end = self.use_end_thought_token and (probabilities_2d == self.end_token_id).any()
+            else:
+                sampled_token_history.append(probabilities_2d.argmax(dim=-1).detach().cpu())
+                contains_start = (
+                    self.use_start_thought_token and
+                    (probabilities_2d[..., self.start_token_id].sum() > 0)
+                )
+                contains_end = (
+                    self.use_end_thought_token and
+                    (probabilities_2d[..., self.end_token_id].sum() > 0)
+                )
             contains_thought = contains_start or contains_end
 
             if not contains_thought:
