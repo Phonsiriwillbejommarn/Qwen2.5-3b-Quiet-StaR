@@ -583,6 +583,9 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
             if torch.isnan(rm_logits).any():
                 rm_logits = torch.clamp(torch.nan_to_num(rm_logits, nan=0.0), min=-30.0, max=30.0)
 
+            # Clone to avoid inplace modification errors during backward pass
+            rm_logits = rm_logits.clone()
+
             # Ban cheap tokens (emoji, excessive newlines, unicode) from thought sampling
             if self.training and ahead_idx < self.n_ahead - 1:
                 if self._banned_thought_tokens_mask is not None:
