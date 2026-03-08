@@ -546,10 +546,11 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                         ).reshape(logits.shape[0], -1)
                         original_dqn_reward = cur_policy_reward_base_loss.detach() - unreduced_loss
 
-                    if prev_probabilities_2d is not None and prev_sample_probs is not None:
-                        # Find indices of non-zero elements
+                    if prev_probabilities_2d is not None and prev_sample_probs is not None and prev_probabilities_2d.dim() == 2:
+                        # Only compute action log-likelihoods for thought phase (2D probability distributions)
+                        # Skip for talk phase where prev_probabilities_2d is 1D token indices
                         nonzero_indices = prev_probabilities_2d.nonzero()
-                        if nonzero_indices.shape[0] > 0:
+                        if nonzero_indices.shape[0] > 0 and nonzero_indices.dim() == 2 and nonzero_indices.shape[1] >= 2:
                             # Sanitize NaNs before clamping because clamp(nan) == nan
                             safe_prev_sample = torch.nan_to_num(prev_sample_probs, nan=0.0)
                             clamped_sample_probs = torch.clamp(safe_prev_sample, min=-1e4, max=1e4)
