@@ -336,6 +336,45 @@ def model_init(args, tokenizer):
             model.end_token_id = tokenizer.convert_tokens_to_ids("<|endthought|>")
             model.tokenizer_has_end_thought_token = True
 
+        # Pre-compute banned thought tokens mask to save time during training
+        logger.info("Building banned token mask for thought generation...")
+        banned = torch.zeros(model.vocab_size, dtype=torch.bool)
+        
+        # Fast decode all tokens to check for emoji/unicode/newlines
+        for token_id in range(model.vocab_size):
+            try:
+                token_str = tokenizer.decode([token_id])
+            except Exception:
+                banned[token_id] = True
+                continue
+                
+            # Ban if contains emoji or high unicode (> U+2000)
+            has_bad_char = False
+            for ch in token_str:
+                cp = ord(ch)
+                # Allow ASCII printable (32-126) and common latin extended (128-591)
+                # Allow special tokens like <|startthought|> and dashes/quotes
+                if cp > 591 and cp not in (8208, 8211, 8212, 8216, 8217, 8220, 8221) and not (token_str.startswith("<|") and token_str.endswith("|>")):
+                    has_bad_char = True
+                    break
+                    
+            if has_bad_char:
+                banned[token_id] = True
+                continue
+                
+            # Ban pure whitespace tokens (except single space)
+            if token_str.strip() == '' and token_str != ' ':
+                banned[token_id] = True
+                continue
+                
+            # Ban tokens that are just newlines
+            if token_str.strip() == '' and '\n' in token_str:
+                banned[token_id] = True
+                continue
+                
+        model._banned_thought_tokens_mask = banned
+        logger.info(f"Banned {banned.sum().item()} cheap tokens from thought generation")
+
         # Gradient accumulation
         gradient_accumulation_steps = max(1, args.full_batch_size // args.batch_size)
         model.gradient_accumulation_steps = gradient_accumulation_steps
