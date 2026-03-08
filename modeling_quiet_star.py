@@ -589,15 +589,20 @@ class QuietStarQwen2ForCausalLM(Qwen2PreTrainedModel, GenerationMixin):
                     mask = self._banned_thought_tokens_mask.to(rm_logits.device)
                     rm_logits[..., mask] = -1e10
 
-            # Repetition penalty: discourage sampling the same token again
+            # Repetition penalty: discourage sampling the same token again (vectorized)
             if self.training and ahead_idx > 0 and len(sampled_token_history) > 0:
-                last_tokens = sampled_token_history[-1]  # [batch_size * seq_len]
-                for i in range(rm_logits.view(-1, rm_logits.size(-1)).size(0)):
-                    token_id = last_tokens[i].item()
-                    if rm_logits.view(-1, rm_logits.size(-1))[i, token_id] > 0:
-                        rm_logits.view(-1, rm_logits.size(-1))[i, token_id] /= self.repetition_penalty
-                    else:
-                        rm_logits.view(-1, rm_logits.size(-1))[i, token_id] *= self.repetition_penalty
+                last_tokens = sampled_token_history[-1].to(rm_logits.device)  # [batch_size * seq_len]
+                flat_logits = rm_logits.view(-1, rm_logits.size(-1))
+                if last_tokens.shape[0] == flat_logits.shape[0]:
+                    # Gather logits for the last tokens
+                    token_logits = flat_logits.gather(1, last_tokens.unsqueeze(1)).squeeze(1)
+                    # Apply penalty: divide if positive, multiply if negative
+                    penalized = torch.where(
+                        token_logits > 0,
+                        token_logits / self.repetition_penalty,
+                        token_logits * self.repetition_penalty
+                    )
+                    flat_logits.scatter_(1, last_tokens.unsqueeze(1), penalized.unsqueeze(1))
 
             if self.tokenizer_has_start_thought_token:
                 rm_logits[..., self.start_token_id] = -1e10
